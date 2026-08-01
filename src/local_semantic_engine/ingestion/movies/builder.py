@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import os
@@ -14,7 +15,7 @@ from typing import Protocol
 import httpx
 
 from local_semantic_engine.domains.movies.models import MovieRecord
-from local_semantic_engine.ingestion.movies.imdb import select_most_voted_movies
+from local_semantic_engine.ingestion.movies.imdb import ImdbMovieCandidate, select_most_voted_movies
 from local_semantic_engine.ingestion.movies.normalizers import normalize_movie
 
 IMDB_DATASET_BASE_URL = "https://datasets.imdbws.com"
@@ -74,8 +75,16 @@ class ImdbDatasetDownloader:
 class MovieCorpusBuilder:
     """Select IMDb movies, optionally enrich them, and write a local snapshot."""
 
-    def __init__(self, *, enricher: MovieEnricher | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        enricher: MovieEnricher | None = None,
+        enrichment_concurrency: int = 4,
+    ) -> None:
+        if enrichment_concurrency < 1:
+            raise ValueError("Enrichment concurrency must be positive.")
         self._enricher = enricher
+        self._enrichment_concurrency = enrichment_concurrency
 
     async def build(
         self,
@@ -91,13 +100,21 @@ class MovieCorpusBuilder:
                 f"IMDb selection returned {len(candidates)} records, expected {limit}."
             )
         cache_directory = output_directory / "tmdb_cache"
-        records: list[MovieRecord] = []
-        enriched_record_count = 0
-        for candidate in candidates:
-            enrichment = await self._load_or_enrich(candidate.imdb_id, cache_directory)
-            if enrichment is not None:
-                enriched_record_count += 1
-            records.append(normalize_movie(candidate, enrichment))
+        semaphore = asyncio.Semaphore(self._enrichment_concurrency)
+
+        async def build_record(
+            candidate_id: str,
+            candidate: ImdbMovieCandidate,
+        ) -> tuple[MovieRecord, bool]:
+            async with semaphore:
+                enrichment = await self._load_or_enrich(candidate_id, cache_directory)
+            return normalize_movie(candidate, enrichment), enrichment is not None
+
+        built_records = await asyncio.gather(
+            *(build_record(candidate.imdb_id, candidate) for candidate in candidates)
+        )
+        records = [record for record, _ in built_records]
+        enriched_record_count = sum(enriched for _, enriched in built_records)
 
         output_directory.mkdir(parents=True, exist_ok=True)
         output_path = output_directory / "movies.jsonl"

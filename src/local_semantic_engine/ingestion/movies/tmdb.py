@@ -14,18 +14,21 @@ class TmdbClient:
 
     def __init__(
         self,
-        read_access_token: str,
+        read_access_token: str | None = None,
         *,
+        api_key: str | None = None,
         language: str = "en-US",
         client: httpx.AsyncClient | None = None,
     ) -> None:
-        if not read_access_token.strip():
-            raise ValueError("A TMDB read access token is required for enrichment.")
+        if not (read_access_token or api_key):
+            raise ValueError("A TMDB read access token or API key is required for enrichment.")
         self._language = language
+        self._api_key = api_key
         self._owns_client = client is None
+        headers = {"Authorization": f"Bearer {read_access_token}"} if read_access_token else {}
         self._client = client or httpx.AsyncClient(
             base_url="https://api.themoviedb.org/3",
-            headers={"Authorization": f"Bearer {read_access_token}"},
+            headers=headers,
             timeout=httpx.Timeout(30.0),
         )
 
@@ -89,7 +92,10 @@ class TmdbClient:
         return enriched
 
     async def _get(self, path: str, *, params: dict[str, str] | None = None) -> dict[str, Any]:
-        response = await self._client.get(path, params=params)
+        request_params = dict(params or {})
+        if self._api_key:
+            request_params["api_key"] = self._api_key
+        response = await self._client.get(path, params=request_params)
         response.raise_for_status()
         body = response.json()
         if not isinstance(body, dict):

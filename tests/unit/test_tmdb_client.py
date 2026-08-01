@@ -35,3 +35,18 @@ async def test_enrichment_combines_details_credits_and_keywords() -> None:
     assert result["directors"] == ["Director Name"]
     assert result["principal_cast"] == ["Actor Name"]
     assert result["keywords"] == ["time travel"]
+
+
+@pytest.mark.asyncio
+async def test_api_key_is_sent_as_a_query_parameter() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.params["api_key"] == "legacy-key"
+        return httpx.Response(200, json={"movie_results": []})
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), base_url="https://api.themoviedb.org/3"
+    ) as http_client:
+        client = TmdbClient(api_key="legacy-key", client=http_client)
+        result = await client.enrich_movie("tt001")
+
+    assert result is None

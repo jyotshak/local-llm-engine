@@ -71,10 +71,10 @@ def build_movie_corpus(
     """Download/select IMDb movies and optionally enrich the snapshot from TMDB."""
 
     settings = load_settings(config)
-    token = os.environ.get("TMDB_READ_ACCESS_TOKEN", "")
-    if not imdb_only and not token:
+    token, api_key = _tmdb_credentials()
+    if not imdb_only and not (token or api_key):
         raise typer.BadParameter(
-            "Set TMDB_READ_ACCESS_TOKEN or use --imdb-only for a metadata-only development corpus."
+            "Set TMDB_READ_ACCESS_TOKEN or TMDB_API_KEY, or use --imdb-only for development."
         )
 
     async def build() -> object:
@@ -92,7 +92,7 @@ def build_movie_corpus(
                 output_directory=settings.storage.processed_data_dir,
                 limit=limit,
             )
-        tmdb = TmdbClient(token)
+        tmdb = TmdbClient(token, api_key=api_key)
         try:
             return await MovieCorpusBuilder(enricher=tmdb).build(
                 basics_path=basics_path,
@@ -109,3 +109,25 @@ def build_movie_corpus(
         f"{result.enriched_record_count} enriched; "
         f"{result.partial_record_count} partial."
     )
+
+
+def _tmdb_credentials() -> tuple[str | None, str | None]:
+    dotenv_values = _read_local_dotenv(Path(".env"))
+    token = os.environ.get("TMDB_READ_ACCESS_TOKEN") or dotenv_values.get("TMDB_READ_ACCESS_TOKEN")
+    api_key = os.environ.get("TMDB_API_KEY") or dotenv_values.get("TMDB_API_KEY")
+    return token, api_key
+
+
+def _read_local_dotenv(path: Path) -> dict[str, str]:
+    """Read simple local secrets without printing, logging, or committing them."""
+
+    if not path.exists():
+        return {}
+    values: dict[str, str] = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        key, value = stripped.split("=", maxsplit=1)
+        values[key.strip()] = value.strip().strip("\"'")
+    return values

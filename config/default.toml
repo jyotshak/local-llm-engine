@@ -1,0 +1,56 @@
+[ollama]
+base_url = "http://127.0.0.1:11434"
+generation_model = ""
+embedding_model = "embeddinggemma"
+connect_timeout_seconds = 5.0
+read_timeout_seconds = 120.0
+max_retries = 1
+keep_alive = "10m"
+context_tokens = 8192
+
+[storage]
+database_path = "data/local_semantic_engine.sqlite3"
+raw_data_dir = "data/raw"
+processed_data_dir = "data/processed"
+index_data_dir = "data/indexes"
+
+[api]
+host = "127.0.0.1"
+port = 8765
+inference_concurrency = 1
+
+[retrieval]
+broad_candidate_count = 100
+negative_weight = 0.35
+quality_weight = 0.05
+
+[validation]
+max_correction_attempts = 2
+strict_missing_data = true
+
+[profiles.fast]
+rerank_candidate_count = 12
+candidate_summary_characters = 220
+max_output_tokens = 400
+temperature = 0.0
+thinking = false
+context_tokens = 8192
+max_correction_attempts = 1
+
+[profiles.balanced]
+rerank_candidate_count = 20
+candidate_summary_characters = 400
+max_output_tokens = 700
+temperature = 0.0
+thinking = false
+context_tokens = 8192
+max_correction_attempts = 2
+
+[profiles.quality]
+rerank_candidate_count = 30
+candidate_summary_characters = 650
+max_output_tokens = 1000
+temperature = 0.1
+thinking = false
+context_tokens = 16384
+max_correction_attempts = 2

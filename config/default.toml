@@ -1,6 +1,6 @@
 [ollama]
 base_url = "http://127.0.0.1:11434"
-generation_model = ""
+generation_model = "qwen3:8b"
 embedding_model = "embeddinggemma"
 connect_timeout_seconds = 5.0
 read_timeout_seconds = 120.0

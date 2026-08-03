@@ -11,15 +11,19 @@ from typing import Annotated
 import typer
 
 from local_semantic_engine.config import load_settings
+from local_semantic_engine.embeddings.ollama import OllamaEmbeddingProvider
 from local_semantic_engine.ingestion.movies.builder import ImdbDatasetDownloader, MovieCorpusBuilder
+from local_semantic_engine.ingestion.movies.indexer import build_movie_index
 from local_semantic_engine.ingestion.movies.tmdb import TmdbClient
 from local_semantic_engine.storage.database import initialize_database
 
 app = typer.Typer(no_args_is_help=True, help="Local Semantic Engine commands.")
 corpus_app = typer.Typer(no_args_is_help=True, help="Explicit corpus setup commands.")
 movies_app = typer.Typer(no_args_is_help=True, help="Movie corpus commands.")
+index_app = typer.Typer(no_args_is_help=True, help="Explicit local index build commands.")
 app.add_typer(corpus_app, name="corpus")
 corpus_app.add_typer(movies_app, name="movies")
+app.add_typer(index_app, name="index")
 ConfigPathOption = Annotated[
     Path | None,
     typer.Option("--config", exists=True, readable=True, help="Path to an optional TOML file."),
@@ -109,6 +113,32 @@ def build_movie_corpus(
         f"{result.enriched_record_count} enriched; "
         f"{result.partial_record_count} partial."
     )
+
+
+@index_app.command("movies")
+def build_movie_vector_index(
+    config: ConfigPathOption = None,
+    batch_size: int = typer.Option(16, min=1, max=128),
+) -> None:
+    """Build the local movie vector index from the frozen JSONL corpus."""
+
+    settings = load_settings(config)
+
+    async def build() -> object:
+        provider = OllamaEmbeddingProvider(settings.ollama)
+        try:
+            return await build_movie_index(
+                corpus_path=settings.storage.processed_data_dir / "movies.jsonl",
+                output_directory=settings.storage.index_data_dir / "movies",
+                embedding_provider=provider,
+                embedding_model=settings.ollama.embedding_model,
+                batch_size=batch_size,
+            )
+        finally:
+            await provider.aclose()
+
+    result = asyncio.run(build())
+    typer.echo(f"Indexed {result.record_count} movies ({result.dimensions} dimensions).")
 
 
 def _tmdb_credentials() -> tuple[str | None, str | None]:

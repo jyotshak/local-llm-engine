@@ -11,19 +11,26 @@ from typing import Annotated
 import typer
 
 from local_semantic_engine.config import load_settings
+from local_semantic_engine.domains.movies.representation import (
+    REPRESENTATION_VERSION,
+    with_representation_hash,
+)
 from local_semantic_engine.embeddings.ollama import OllamaEmbeddingProvider
 from local_semantic_engine.ingestion.movies.builder import ImdbDatasetDownloader, MovieCorpusBuilder
-from local_semantic_engine.ingestion.movies.indexer import build_movie_index
+from local_semantic_engine.ingestion.movies.indexer import build_movie_index, load_movie_corpus
 from local_semantic_engine.ingestion.movies.tmdb import TmdbClient
+from local_semantic_engine.retrieval.numpy_index import NumpyVectorIndex
 from local_semantic_engine.storage.database import initialize_database
 
 app = typer.Typer(no_args_is_help=True, help="Local Semantic Engine commands.")
 corpus_app = typer.Typer(no_args_is_help=True, help="Explicit corpus setup commands.")
 movies_app = typer.Typer(no_args_is_help=True, help="Movie corpus commands.")
 index_app = typer.Typer(no_args_is_help=True, help="Explicit local index build commands.")
+search_app = typer.Typer(no_args_is_help=True, help="Local semantic search commands.")
 app.add_typer(corpus_app, name="corpus")
 corpus_app.add_typer(movies_app, name="movies")
 app.add_typer(index_app, name="index")
+app.add_typer(search_app, name="search")
 ConfigPathOption = Annotated[
     Path | None,
     typer.Option("--config", exists=True, readable=True, help="Path to an optional TOML file."),
@@ -139,6 +146,52 @@ def build_movie_vector_index(
 
     result = asyncio.run(build())
     typer.echo(f"Indexed {result.record_count} movies ({result.dimensions} dimensions).")
+
+
+@search_app.command("movies")
+def search_movies(
+    query: str = typer.Argument(..., min=1, help="Natural-language movie request."),
+    count: int = typer.Option(5, min=1, max=20),
+    config: ConfigPathOption = None,
+) -> None:
+    """Inspect raw semantic matches from the local movie index.
+
+    This is a retrieval diagnostic, not yet the final constrained recommender.
+    """
+
+    settings = load_settings(config)
+    movies = load_movie_corpus(settings.storage.processed_data_dir / "movies.jsonl")
+    hashed_movies = [with_representation_hash(movie) for movie in movies]
+    index = NumpyVectorIndex.load(
+        settings.storage.index_data_dir / "movies",
+        embedding_model=settings.ollama.embedding_model,
+        representation_version=REPRESENTATION_VERSION,
+        record_hashes={movie.id: movie.content_hash for movie in hashed_movies},
+    )
+
+    async def search() -> list[float]:
+        provider = OllamaEmbeddingProvider(settings.ollama)
+        try:
+            return await provider.embed_query(query)
+        finally:
+            await provider.aclose()
+
+    vector = asyncio.run(search())
+    movies_by_id = {movie.id: movie for movie in movies}
+    matches = []
+    for result in index.search(vector, top_k=count):
+        movie = movies_by_id[result.item_id]
+        matches.append(
+            {
+                "id": movie.id,
+                "title": movie.title,
+                "year": movie.year,
+                "runtime_minutes": movie.runtime_minutes,
+                "genres": movie.genres,
+                "semantic_score": round(result.score, 4),
+            }
+        )
+    typer.echo(json.dumps({"query": query, "matches": matches}, indent=2))
 
 
 def _tmdb_credentials() -> tuple[str | None, str | None]:

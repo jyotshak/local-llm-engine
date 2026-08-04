@@ -45,7 +45,7 @@ async def build_movie_index(
 
     if batch_size < 1:
         raise ValueError("Embedding batch size must be positive.")
-    movies = _load_movies(corpus_path)
+    movies = load_movie_corpus(corpus_path)
     rendered = [with_representation_hash(movie) for movie in movies]
     item_ids = [movie.id for movie in rendered]
     if len(set(item_ids)) != len(item_ids):
@@ -75,7 +75,9 @@ async def build_movie_index(
     )
 
 
-def _load_movies(corpus_path: Path) -> list[MovieRecord]:
+def load_movie_corpus(corpus_path: Path) -> list[MovieRecord]:
+    """Load the frozen corpus with a controlled readiness error."""
+
     try:
         lines = corpus_path.read_text(encoding="utf-8").splitlines()
     except FileNotFoundError as exc:

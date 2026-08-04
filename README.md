@@ -22,6 +22,9 @@ Ollama. This workspace uses `X:\LLM\models`.
 lse doctor
 lse corpus movies build
 lse index movies
-lse recommend movies "thoughtful science fiction under two hours"
-lse serve
+lse search movies "thoughtful science fiction under two hours"
 ```
+
+`lse search movies` is the currently available retrieval diagnostic. The next
+milestone adds hard-constraint filtering, Qwen ranking/explanations, then the
+localhost API and streaming chat endpoint.

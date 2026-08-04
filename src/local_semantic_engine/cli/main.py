@@ -11,6 +11,8 @@ from typing import Annotated
 import typer
 
 from local_semantic_engine.config import load_settings
+from local_semantic_engine.domains.movies.models import MovieRecommendationRequest
+from local_semantic_engine.domains.movies.recommender import MovieRecommender
 from local_semantic_engine.domains.movies.representation import (
     REPRESENTATION_VERSION,
     with_representation_hash,
@@ -19,6 +21,7 @@ from local_semantic_engine.embeddings.ollama import OllamaEmbeddingProvider
 from local_semantic_engine.ingestion.movies.builder import ImdbDatasetDownloader, MovieCorpusBuilder
 from local_semantic_engine.ingestion.movies.indexer import build_movie_index, load_movie_corpus
 from local_semantic_engine.ingestion.movies.tmdb import TmdbClient
+from local_semantic_engine.llm.ollama import OllamaClient
 from local_semantic_engine.retrieval.numpy_index import NumpyVectorIndex
 from local_semantic_engine.storage.database import initialize_database
 
@@ -27,10 +30,12 @@ corpus_app = typer.Typer(no_args_is_help=True, help="Explicit corpus setup comma
 movies_app = typer.Typer(no_args_is_help=True, help="Movie corpus commands.")
 index_app = typer.Typer(no_args_is_help=True, help="Explicit local index build commands.")
 search_app = typer.Typer(no_args_is_help=True, help="Local semantic search commands.")
+recommend_app = typer.Typer(no_args_is_help=True, help="Local movie recommendation commands.")
 app.add_typer(corpus_app, name="corpus")
 corpus_app.add_typer(movies_app, name="movies")
 app.add_typer(index_app, name="index")
 app.add_typer(search_app, name="search")
+app.add_typer(recommend_app, name="recommend")
 ConfigPathOption = Annotated[
     Path | None,
     typer.Option("--config", exists=True, readable=True, help="Path to an optional TOML file."),
@@ -192,6 +197,46 @@ def search_movies(
             }
         )
     typer.echo(json.dumps({"query": query, "matches": matches}, indent=2))
+
+
+@recommend_app.command("movies")
+def recommend_movies(
+    query: str = typer.Argument(..., min=1, help="Natural-language movie request."),
+    count: int = typer.Option(5, min=1, max=10),
+    profile: str = typer.Option("balanced", case_sensitive=False),
+    config: ConfigPathOption = None,
+) -> None:
+    """Recommend movies with deterministic hard-constraint enforcement."""
+
+    settings = load_settings(config)
+    movies = load_movie_corpus(settings.storage.processed_data_dir / "movies.jsonl")
+    hashed_movies = [with_representation_hash(movie) for movie in movies]
+    index = NumpyVectorIndex.load(
+        settings.storage.index_data_dir / "movies",
+        embedding_model=settings.ollama.embedding_model,
+        representation_version=REPRESENTATION_VERSION,
+        record_hashes={movie.id: movie.content_hash for movie in hashed_movies},
+    )
+    request = MovieRecommendationRequest(query=query, count=count, profile=profile.lower())
+
+    async def recommend() -> object:
+        generator = OllamaClient(settings.ollama)
+        embedder = OllamaEmbeddingProvider(settings.ollama)
+        try:
+            recommender = MovieRecommender(
+                settings=settings,
+                generator=generator,
+                embedder=embedder,
+                index=index,
+                movies_by_id={movie.id: movie for movie in movies},
+            )
+            return await recommender.recommend(request)
+        finally:
+            await generator.aclose()
+            await embedder.aclose()
+
+    response = asyncio.run(recommend())
+    typer.echo(response.model_dump_json(indent=2))
 
 
 def _tmdb_credentials() -> tuple[str | None, str | None]:

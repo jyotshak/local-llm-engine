@@ -23,8 +23,10 @@ lse doctor
 lse corpus movies build
 lse index movies
 lse search movies "thoughtful science fiction under two hours"
+lse recommend movies "thoughtful science fiction under two hours"
 ```
 
-`lse search movies` is the currently available retrieval diagnostic. The next
-milestone adds hard-constraint filtering, Qwen ranking/explanations, then the
-localhost API and streaming chat endpoint.
+`lse search movies` is a retrieval diagnostic. `lse recommend movies` uses Qwen
+locally to interpret and rank candidates, while the app enforces hard constraints
+such as runtime against local records before and after Qwen's response. The next
+milestone is the localhost API and streaming chat endpoint.

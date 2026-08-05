@@ -9,6 +9,7 @@ __pycache__/
 data/raw/
 data/processed/
 data/indexes/
+data/evaluation/reports/
 data/*.db
 logs/
 models/

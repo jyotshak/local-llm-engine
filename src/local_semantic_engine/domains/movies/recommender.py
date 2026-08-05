@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import inspect
 import re
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from typing import Protocol
 from uuid import uuid4
@@ -38,6 +39,9 @@ class QueryEmbedder(Protocol):
     async def embed_query(self, text: str) -> list[float]: ...
 
 
+ProgressCallback = Callable[[str, str], Awaitable[None] | None]
+
+
 @dataclass(slots=True)
 class MovieRecommender:
     settings: AppSettings
@@ -46,11 +50,15 @@ class MovieRecommender:
     index: NumpyVectorIndex
     movies_by_id: dict[str, MovieRecord]
 
-    async def recommend(self, request: MovieRecommendationRequest) -> MovieRecommendationResponse:
+    async def recommend(
+        self, request: MovieRecommendationRequest, *, on_progress: ProgressCallback | None = None
+    ) -> MovieRecommendationResponse:
         """Produce recommendations that are always checked against local facts."""
 
+        await _notify(on_progress, "parsing", "Interpreting preferences and hard constraints.")
         preferences = await self._parse_preferences(request.query, request.profile.value)
         movies = list(self.movies_by_id.values())
+        await _notify(on_progress, "filtering", "Applying deterministic catalogue constraints.")
         eligibility = apply_hard_constraints(
             movies,
             preferences.hard_constraints,
@@ -69,6 +77,7 @@ class MovieRecommender:
                 profile=request.profile,
             )
 
+        await _notify(on_progress, "retrieving", "Searching eligible movies semantically.")
         query_vector = await self.embedder.embed_query(request.query)
         candidate_count = min(
             self.settings.profile(request.profile.value).rerank_candidate_count,
@@ -82,11 +91,15 @@ class MovieRecommender:
         )
         candidates = [self.movies_by_id[match.item_id] for match in semantic_matches]
         requested_count = min(request.count, len(candidates))
+        await _notify(on_progress, "ranking", "Ranking the local candidate set.")
         reranked = await self._rerank(
             query=request.query,
             candidates=candidates,
             requested_count=requested_count,
             profile=request.profile.value,
+        )
+        await _notify(
+            on_progress, "validating", "Verifying returned recommendations against facts."
         )
         validated = validate_reranker_response(
             reranked,
@@ -121,7 +134,6 @@ class MovieRecommender:
             trace_id=str(uuid4()),
             profile=request.profile,
         )
-
     async def _parse_preferences(self, query: str, profile: str) -> MoviePreferences:
         parsed = await self.generator.generate_structured(
             [
@@ -181,6 +193,14 @@ class MovieRecommender:
             thinking=selected.thinking,
             keep_alive=self.settings.ollama.keep_alive,
         )
+
+
+async def _notify(callback: ProgressCallback | None, stage: str, message: str) -> None:
+    if callback is None:
+        return
+    result = callback(stage, message)
+    if inspect.isawaitable(result):
+        await result
 
 
 _RUNTIME_WORD_VALUES = {"one": 1, "two": 2, "three": 3, "four": 4}

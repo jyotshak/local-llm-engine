@@ -9,7 +9,10 @@ from pathlib import Path
 from typing import Annotated
 
 import typer
+import uvicorn
 
+from local_semantic_engine.api import create_app
+from local_semantic_engine.api.app import build_movie_runtime
 from local_semantic_engine.config import load_settings
 from local_semantic_engine.domains.movies.models import MovieRecommendationRequest
 from local_semantic_engine.domains.movies.recommender import MovieRecommender
@@ -18,6 +21,7 @@ from local_semantic_engine.domains.movies.representation import (
     with_representation_hash,
 )
 from local_semantic_engine.embeddings.ollama import OllamaEmbeddingProvider
+from local_semantic_engine.evaluation.movies import evaluate_movies, load_movie_evaluation_cases
 from local_semantic_engine.ingestion.movies.builder import ImdbDatasetDownloader, MovieCorpusBuilder
 from local_semantic_engine.ingestion.movies.indexer import build_movie_index, load_movie_corpus
 from local_semantic_engine.ingestion.movies.tmdb import TmdbClient
@@ -31,14 +35,28 @@ movies_app = typer.Typer(no_args_is_help=True, help="Movie corpus commands.")
 index_app = typer.Typer(no_args_is_help=True, help="Explicit local index build commands.")
 search_app = typer.Typer(no_args_is_help=True, help="Local semantic search commands.")
 recommend_app = typer.Typer(no_args_is_help=True, help="Local movie recommendation commands.")
+evaluate_app = typer.Typer(no_args_is_help=True, help="Repeatable local evaluation commands.")
 app.add_typer(corpus_app, name="corpus")
 corpus_app.add_typer(movies_app, name="movies")
 app.add_typer(index_app, name="index")
 app.add_typer(search_app, name="search")
 app.add_typer(recommend_app, name="recommend")
+app.add_typer(evaluate_app, name="evaluate")
 ConfigPathOption = Annotated[
     Path | None,
     typer.Option("--config", exists=True, readable=True, help="Path to an optional TOML file."),
+]
+EvaluationCasesOption = Annotated[
+    Path,
+    typer.Option(
+        "--cases",
+        exists=True,
+        readable=True,
+        help="Path to newline-delimited JSON evaluation cases.",
+    ),
+]
+EvaluationReportOption = Annotated[
+    Path | None, typer.Option("--report", help="Optional JSON report destination.")
 ]
 
 
@@ -76,6 +94,22 @@ def init_db(
     settings = load_settings(config)
     initialize_database(settings.storage.database_path)
     typer.echo(f"Initialized {settings.storage.database_path}")
+
+
+@app.command()
+def serve(
+    config: ConfigPathOption = None,
+) -> None:
+    """Run the loopback-only local HTTP API."""
+
+    settings = load_settings(config)
+    typer.echo(f"Serving local API at http://{settings.api.host}:{settings.api.port}")
+    uvicorn.run(
+        create_app(settings),
+        host=settings.api.host,
+        port=settings.api.port,
+        log_level="info",
+    )
 
 
 @movies_app.command("build")
@@ -237,6 +271,31 @@ def recommend_movies(
 
     response = asyncio.run(recommend())
     typer.echo(response.model_dump_json(indent=2))
+
+
+@evaluate_app.command("movies")
+def evaluate_movie_recommender(
+    config: ConfigPathOption = None,
+    cases: EvaluationCasesOption = Path("data/evaluation/movie_smoke_cases.jsonl"),
+    report: EvaluationReportOption = None,
+) -> None:
+    """Run the tracked movie smoke cases and report factual-constraint compliance."""
+
+    settings = load_settings(config)
+
+    async def evaluate() -> object:
+        runtime = await build_movie_runtime(settings)
+        try:
+            return await evaluate_movies(runtime.recommender, load_movie_evaluation_cases(cases))
+        finally:
+            await runtime.close()
+
+    result = asyncio.run(evaluate())
+    output = result.model_dump_json(indent=2)
+    if report is not None:
+        report.parent.mkdir(parents=True, exist_ok=True)
+        report.write_text(output + "\n", encoding="utf-8")
+    typer.echo(output)
 
 
 def _tmdb_credentials() -> tuple[str | None, str | None]:

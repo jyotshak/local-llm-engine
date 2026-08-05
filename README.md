@@ -28,5 +28,28 @@ lse recommend movies "thoughtful science fiction under two hours"
 
 `lse search movies` is a retrieval diagnostic. `lse recommend movies` uses Qwen
 locally to interpret and rank candidates, while the app enforces hard constraints
-such as runtime against local records before and after Qwen's response. The next
-milestone is the localhost API and streaming chat endpoint.
+such as runtime against local records before and after Qwen's response.
+
+## Local API
+
+Start the loopback-only API:
+
+```powershell
+lse serve
+```
+
+Then use `http://127.0.0.1:8765/docs` for interactive local API documentation.
+The main endpoints are `GET /health`, `POST /v1/movies/recommend`, and
+`POST /v1/movies/recommend/stream` (server-sent progress events followed by a
+validated result).
+
+## Evaluation
+
+Run the tracked smoke cases after changing prompts, models, or retrieval logic:
+
+```powershell
+lse evaluate movies --report data/evaluation/reports/movie_latest.json
+```
+
+The report measures recommendation count, configured factual constraints, and
+per-case latency. It deliberately does not claim subjective recommendation quality.

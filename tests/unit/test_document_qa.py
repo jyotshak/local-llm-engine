@@ -19,6 +19,7 @@ class FakeGenerator:
         return GroundedAnswer(
             answer="The evidence supports this answer.",
             cited_chunk_ids=["book:p2:c1", "appendix:p1:c1", "unknown"],
+            insufficient_evidence=False,
         )
 
 

@@ -28,9 +28,11 @@ class DocumentCitation(BaseModel):
 
 
 class GroundedAnswer(BaseModel):
-    answer: str = Field(min_length=1, max_length=6000)
-    cited_chunk_ids: list[str] = Field(default_factory=list)
-    insufficient_evidence: bool = False
+    """Minimal schema kept compatible with Ollama's constrained JSON grammar."""
+
+    answer: str
+    cited_chunk_ids: list[str]
+    insufficient_evidence: bool
 
 
 class DocumentAnswerResponse(BaseModel):

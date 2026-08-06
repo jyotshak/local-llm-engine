@@ -18,7 +18,7 @@ DOCUMENT_REPRESENTATION_VERSION = "1"
 def extract_pdf_chunks(
     directory: Path, *, chunk_size: int = 1200, overlap: int = 180
 ) -> list[DocumentChunk]:
-    pdfs = sorted(directory.glob("*.pdf"))
+    pdfs = sorted(directory.rglob("*.pdf"))
     if not pdfs:
         raise CorpusNotReadyError(
             f"No PDFs found in {directory}. Add text-based PDFs and try again."

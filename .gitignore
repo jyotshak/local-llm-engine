@@ -10,6 +10,8 @@ data/raw/
 data/processed/
 data/indexes/
 data/evaluation/reports/
+data/documents/raw/
+data/documents/processed/
 data/*.db
 logs/
 models/

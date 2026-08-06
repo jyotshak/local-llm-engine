@@ -15,6 +15,11 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 from local_semantic_engine.config.models import AppSettings
 from local_semantic_engine.core.errors import LocalSemanticEngineError
+from local_semantic_engine.domains.documents.models import (
+    DocumentAnswerResponse,
+    DocumentQuestionRequest,
+)
+from local_semantic_engine.domains.documents.qa import DocumentAnswerer
 from local_semantic_engine.domains.movies.models import (
     MovieRecommendationRequest,
     MovieRecommendationResponse,
@@ -25,6 +30,10 @@ from local_semantic_engine.domains.movies.representation import (
     with_representation_hash,
 )
 from local_semantic_engine.embeddings.ollama import OllamaEmbeddingProvider
+from local_semantic_engine.ingestion.documents.pdf import (
+    DOCUMENT_REPRESENTATION_VERSION,
+    load_document_chunks,
+)
 from local_semantic_engine.ingestion.movies.indexer import load_movie_corpus
 from local_semantic_engine.llm.ollama import OllamaClient
 from local_semantic_engine.retrieval.numpy_index import NumpyVectorIndex
@@ -52,6 +61,17 @@ class MovieRuntime:
         }
 
 
+@dataclass(slots=True)
+class DocumentRuntime:
+    answerer: DocumentAnswerer
+    generator: OllamaClient
+    embedder: OllamaEmbeddingProvider
+
+    async def close(self) -> None:
+        await self.generator.aclose()
+        await self.embedder.aclose()
+
+
 async def build_movie_runtime(settings: AppSettings) -> MovieRuntime:
     movies = load_movie_corpus(settings.storage.processed_data_dir / "movies.jsonl")
     hashed_movies = [with_representation_hash(movie) for movie in movies]
@@ -70,6 +90,30 @@ async def build_movie_runtime(settings: AppSettings) -> MovieRuntime:
             embedder=embedder,
             index=index,
             movies_by_id={movie.id: movie for movie in movies},
+        ),
+        generator=generator,
+        embedder=embedder,
+    )
+
+
+async def build_document_runtime(settings: AppSettings) -> DocumentRuntime:
+    chunks = load_document_chunks(settings.storage.document_processed_dir / "chunks.jsonl")
+    index = NumpyVectorIndex.load(
+        settings.storage.document_processed_dir,
+        embedding_model=settings.ollama.embedding_model,
+        representation_version=DOCUMENT_REPRESENTATION_VERSION,
+        record_hashes={chunk.id: chunk.content_hash for chunk in chunks},
+        prefix="document",
+    )
+    generator = OllamaClient(settings.ollama)
+    embedder = OllamaEmbeddingProvider(settings.ollama)
+    return DocumentRuntime(
+        answerer=DocumentAnswerer(
+            settings=settings,
+            generator=generator,
+            embedder=embedder,
+            index=index,
+            chunks=chunks,
         ),
         generator=generator,
         embedder=embedder,
@@ -147,6 +191,20 @@ def create_app(
             yield _sse("result", response.model_dump(mode="json"))
 
         return StreamingResponse(events(), media_type="text/event-stream")
+
+    @app.post("/v1/documents/answer", response_model=DocumentAnswerResponse)
+    async def answer_document_question(
+        payload: DocumentQuestionRequest, request: Request
+    ) -> DocumentAnswerResponse:
+        started = perf_counter()
+        async with request.app.state.inference_semaphore:
+            runtime = await build_document_runtime(settings)
+            try:
+                response = await runtime.answerer.answer(payload)
+            finally:
+                await runtime.close()
+        response.timings_ms["total"] = round((perf_counter() - started) * 1000, 2)
+        return response
 
     return app
 

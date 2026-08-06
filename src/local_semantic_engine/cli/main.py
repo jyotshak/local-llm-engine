@@ -14,6 +14,8 @@ import uvicorn
 from local_semantic_engine.api import create_app
 from local_semantic_engine.api.app import build_movie_runtime
 from local_semantic_engine.config import load_settings
+from local_semantic_engine.domains.documents.models import DocumentQuestionRequest
+from local_semantic_engine.domains.documents.qa import DocumentAnswerer
 from local_semantic_engine.domains.movies.models import MovieRecommendationRequest
 from local_semantic_engine.domains.movies.recommender import MovieRecommender
 from local_semantic_engine.domains.movies.representation import (
@@ -22,6 +24,12 @@ from local_semantic_engine.domains.movies.representation import (
 )
 from local_semantic_engine.embeddings.ollama import OllamaEmbeddingProvider
 from local_semantic_engine.evaluation.movies import evaluate_movies, load_movie_evaluation_cases
+from local_semantic_engine.ingestion.documents.pdf import (
+    DOCUMENT_REPRESENTATION_VERSION,
+    build_document_index,
+    extract_pdf_chunks,
+    load_document_chunks,
+)
 from local_semantic_engine.ingestion.movies.builder import ImdbDatasetDownloader, MovieCorpusBuilder
 from local_semantic_engine.ingestion.movies.indexer import build_movie_index, load_movie_corpus
 from local_semantic_engine.ingestion.movies.tmdb import TmdbClient
@@ -32,16 +40,20 @@ from local_semantic_engine.storage.database import initialize_database
 app = typer.Typer(no_args_is_help=True, help="Local Semantic Engine commands.")
 corpus_app = typer.Typer(no_args_is_help=True, help="Explicit corpus setup commands.")
 movies_app = typer.Typer(no_args_is_help=True, help="Movie corpus commands.")
+documents_app = typer.Typer(no_args_is_help=True, help="Local PDF corpus commands.")
 index_app = typer.Typer(no_args_is_help=True, help="Explicit local index build commands.")
 search_app = typer.Typer(no_args_is_help=True, help="Local semantic search commands.")
 recommend_app = typer.Typer(no_args_is_help=True, help="Local movie recommendation commands.")
 evaluate_app = typer.Typer(no_args_is_help=True, help="Repeatable local evaluation commands.")
+ask_app = typer.Typer(no_args_is_help=True, help="Grounded local question-answering commands.")
 app.add_typer(corpus_app, name="corpus")
 corpus_app.add_typer(movies_app, name="movies")
+corpus_app.add_typer(documents_app, name="documents")
 app.add_typer(index_app, name="index")
 app.add_typer(search_app, name="search")
 app.add_typer(recommend_app, name="recommend")
 app.add_typer(evaluate_app, name="evaluate")
+app.add_typer(ask_app, name="ask")
 ConfigPathOption = Annotated[
     Path | None,
     typer.Option("--config", exists=True, readable=True, help="Path to an optional TOML file."),
@@ -161,6 +173,28 @@ def build_movie_corpus(
     )
 
 
+@documents_app.command("build")
+def build_document_corpus(config: ConfigPathOption = None) -> None:
+    """Extract, embed, and index text-based PDFs from the local documents folder."""
+
+    settings = load_settings(config)
+    chunks = extract_pdf_chunks(settings.storage.document_raw_dir)
+
+    async def build() -> int:
+        provider = OllamaEmbeddingProvider(settings.ollama)
+        try:
+            return await build_document_index(
+                chunks=chunks,
+                embedding_provider=provider,
+                embedding_model=settings.ollama.embedding_model,
+                output_directory=settings.storage.document_processed_dir,
+            )
+        finally:
+            await provider.aclose()
+
+    typer.echo(f"Built document index with {asyncio.run(build())} page-aware chunks.")
+
+
 @index_app.command("movies")
 def build_movie_vector_index(
     config: ConfigPathOption = None,
@@ -271,6 +305,46 @@ def recommend_movies(
 
     response = asyncio.run(recommend())
     typer.echo(response.model_dump_json(indent=2))
+
+
+@ask_app.command("documents")
+def ask_documents(
+    question: str = typer.Argument(..., min=1),
+    max_chunks: int = typer.Option(6, min=1, max=20),
+    profile: str = typer.Option("balanced", case_sensitive=False),
+    config: ConfigPathOption = None,
+) -> None:
+    """Answer a question using only locally indexed PDF evidence."""
+
+    settings = load_settings(config)
+    chunks = load_document_chunks(settings.storage.document_processed_dir / "chunks.jsonl")
+    index = NumpyVectorIndex.load(
+        settings.storage.document_processed_dir,
+        embedding_model=settings.ollama.embedding_model,
+        representation_version=DOCUMENT_REPRESENTATION_VERSION,
+        record_hashes={chunk.id: chunk.content_hash for chunk in chunks},
+        prefix="document",
+    )
+    request = DocumentQuestionRequest(
+        question=question, max_chunks=max_chunks, profile=profile.lower()
+    )
+
+    async def answer() -> object:
+        generator = OllamaClient(settings.ollama)
+        embedder = OllamaEmbeddingProvider(settings.ollama)
+        try:
+            return await DocumentAnswerer(
+                settings=settings,
+                generator=generator,
+                embedder=embedder,
+                index=index,
+                chunks=chunks,
+            ).answer(request)
+        finally:
+            await generator.aclose()
+            await embedder.aclose()
+
+    typer.echo(asyncio.run(answer()).model_dump_json(indent=2))
 
 
 @evaluate_app.command("movies")

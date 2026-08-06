@@ -78,7 +78,7 @@ class NumpyVectorIndex:
         ordered = rows[np.argsort(-scores[rows], kind="stable")[:top_k]]
         return [ScoredId(item_id=self._item_ids[row], score=float(scores[row])) for row in ordered]
 
-    def save(self, directory: Path, manifest: IndexManifest) -> None:
+    def save(self, directory: Path, manifest: IndexManifest, *, prefix: str = "movie") -> None:
         """Persist matrix, ID mapping, and manifest through atomic replacements."""
 
         if manifest.dimensions != self.dimensions:
@@ -86,10 +86,10 @@ class NumpyVectorIndex:
         if set(manifest.record_hashes) != set(self._item_ids):
             raise ValueError("Manifest record hashes do not match index IDs.")
         directory.mkdir(parents=True, exist_ok=True)
-        _atomic_numpy_save(directory / "movie_vectors.npy", self._vectors)
-        _atomic_text_write(directory / "movie_ids.json", json.dumps(self._item_ids, indent=2))
+        _atomic_numpy_save(directory / f"{prefix}_vectors.npy", self._vectors)
+        _atomic_text_write(directory / f"{prefix}_ids.json", json.dumps(self._item_ids, indent=2))
         _atomic_text_write(
-            directory / "movie_index_manifest.json",
+            directory / f"{prefix}_index_manifest.json",
             manifest.model_dump_json(indent=2),
         )
 
@@ -101,15 +101,16 @@ class NumpyVectorIndex:
         embedding_model: str,
         representation_version: str,
         record_hashes: dict[str, str],
+        prefix: str = "movie",
     ) -> NumpyVectorIndex:
         """Load a compatible index or raise a controlled readiness error."""
 
         try:
-            ids = json.loads((directory / "movie_ids.json").read_text(encoding="utf-8"))
+            ids = json.loads((directory / f"{prefix}_ids.json").read_text(encoding="utf-8"))
             manifest = IndexManifest.model_validate_json(
-                (directory / "movie_index_manifest.json").read_text(encoding="utf-8")
+                (directory / f"{prefix}_index_manifest.json").read_text(encoding="utf-8")
             )
-            vectors = np.load(directory / "movie_vectors.npy", allow_pickle=False)
+            vectors = np.load(directory / f"{prefix}_vectors.npy", allow_pickle=False)
         except (FileNotFoundError, json.JSONDecodeError, OSError, ValueError) as exc:
             raise CorpusNotReadyError(
                 "The local movie index is unavailable or unreadable."

@@ -13,6 +13,8 @@ database_path = "data/local_semantic_engine.sqlite3"
 raw_data_dir = "data/raw"
 processed_data_dir = "data/processed"
 index_data_dir = "data/indexes"
+document_raw_dir = "data/documents/raw"
+document_processed_dir = "data/documents/processed"
 
 [api]
 host = "127.0.0.1"

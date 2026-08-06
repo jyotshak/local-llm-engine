@@ -32,6 +32,8 @@ class StorageSettings(BaseModel):
     raw_data_dir: Path = Path("data/raw")
     processed_data_dir: Path = Path("data/processed")
     index_data_dir: Path = Path("data/indexes")
+    document_raw_dir: Path = Path("data/documents/raw")
+    document_processed_dir: Path = Path("data/documents/processed")
 
 
 class ApiSettings(BaseModel):

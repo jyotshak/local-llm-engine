@@ -39,9 +39,9 @@ lse serve
 ```
 
 Then use `http://127.0.0.1:8765/docs` for interactive local API documentation.
-The main endpoints are `GET /health`, `POST /v1/movies/recommend`, and
+The main endpoints are `GET /health`, `POST /v1/movies/recommend`,
 `POST /v1/movies/recommend/stream` (server-sent progress events followed by a
-validated result).
+validated result), and `POST /v1/documents/answer`.
 
 ## Evaluation
 
@@ -53,3 +53,15 @@ lse evaluate movies --report data/evaluation/reports/movie_latest.json
 
 The report measures recommendation count, configured factual constraints, and
 per-case latency. It deliberately does not claim subjective recommendation quality.
+
+## Document Q&A
+
+Place text-based PDFs in `data/documents/raw/`, then build a separate local index:
+
+```powershell
+lse corpus documents build
+lse ask documents "What does the author say about the main theme?"
+```
+
+Answers are grounded in retrieved page-aware chunks and return a de-duplicated list
+of filename/page-number citations. Image-only or scanned PDFs are outside Version 1.
